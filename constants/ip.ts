@@ -1,1 +1,1 @@
-export const Ipaddress = "http://localhost:5000";
+export const Ipaddress = "https://audiostories-server-92yv.vercel.app";
