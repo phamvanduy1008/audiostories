@@ -17,6 +17,7 @@ const Player: React.FC = () => {
   const [selectedChapter, setSelectedChapter] = useState<(Chapter & { audioUrl?: string }) | null>(null);
   const [currentChapterIndex, setCurrentChapterIndex] = useState<number>(-1);
   const [audioError, setAudioError] = useState<string | null>(null);
+  const [isBuffering, setIsBuffering] = useState(false);
   const [hasUserInteracted, setHasUserInteracted] = useState(false);
 
   const [isPlaying, setIsPlaying] = useState(false);
@@ -31,6 +32,7 @@ const Player: React.FC = () => {
   const volumeBarRef = useRef<HTMLDivElement>(null);
   const currentTimeRef = useRef(0);
   const durationRef = useRef(0);
+  const bufferingTimer = useRef<NodeJS.Timeout | null>(null);
 
   const userId = useMemo(() => {
     try {
@@ -144,16 +146,33 @@ const Player: React.FC = () => {
     const handleError = () => {
       setAudioError('Không tải được audio.');
       setIsPlaying(false);
+      setIsBuffering(false);
+    };
+
+    const handleWaiting = () => {
+      bufferingTimer.current = setTimeout(() => {
+        if (!isPlaying) setIsBuffering(true);
+      }, 1500);
+    };
+
+    const handlePlaying = () => {
+      if (bufferingTimer.current) clearTimeout(bufferingTimer.current);
+      setIsBuffering(false);
     };
 
     audio.addEventListener('loadedmetadata', handleLoadedMetadata);
     audio.addEventListener('error', handleError);
+    audio.addEventListener('waiting', handleWaiting);
+    audio.addEventListener('playing', handlePlaying);
 
     return () => {
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('error', handleError);
+      audio.removeEventListener('waiting', handleWaiting);
+      audio.removeEventListener('playing', handlePlaying);
+      if (bufferingTimer.current) clearTimeout(bufferingTimer.current);
     };
-  }, [selectedChapter?.audioUrl, location.state?.lastPosition, hasUserInteracted]);
+  }, [selectedChapter?.audioUrl, location.state?.lastPosition, hasUserInteracted, isPlaying]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -230,6 +249,7 @@ const Player: React.FC = () => {
     setDuration(0);
     durationRef.current = 0;
     setAudioError(null);
+    setIsBuffering(false);
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
@@ -271,6 +291,7 @@ const Player: React.FC = () => {
     const rect = progressBarRef.current.getBoundingClientRect();
     const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     const newTime = percent * duration;
+    setIsBuffering(true);
     audioRef.current.currentTime = newTime;
     currentTimeRef.current = newTime;
     setCurrentTime(newTime);
@@ -301,9 +322,9 @@ const Player: React.FC = () => {
   if (!story) return <div className="p-20 text-center">Không tìm thấy câu chuyện</div>;
 
   return (
-    <div className="min-h-screen w-full bg-background-light dark:bg-background-dark flex flex-col touch-manipulation">
+    <div className="min-h-screen w-full bg-white dark:bg-background-dark">
       {/* Header */}
-      <header className="flex items-center justify-between w-full px-4 py-3 z-20 border-b border-slate-200 dark:border-slate-800">
+      <header className="flex items-center justify-between w-full px-4 py-3 z-20">
         <button
           onClick={() => navigate(-1)}
           className="flex items-center gap-2 text-slate-600 dark:text-slate-300 hover:text-primary transition-colors group touch-manipulation"
@@ -323,6 +344,16 @@ const Player: React.FC = () => {
 
       {/* Main content */}
       <main className="flex-1 flex flex-col items-center w-full px-4 sm:px-6 md:px-8 lg:px-12 py-4 max-w-5xl mx-auto relative">
+        {/* Buffering overlay */}
+        {isBuffering && !isPlaying && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/50 backdrop-blur-sm z-10 text-white">
+            <div className="flex flex-col items-center gap-2">
+              <span className="material-symbols-outlined animate-spin text-5xl">hourglass_empty</span>
+              <span className="text-base font-medium">Đang tải... (mạng chậm)</span>
+            </div>
+          </div>
+        )}
+
         {/* Title & Chapter info */}
         <div className="text-center mb-4 w-full">
           <span className="inline-block px-3 py-1 text-xs font-bold tracking-widest text-primary uppercase bg-primary/10 rounded-full">
@@ -372,8 +403,18 @@ const Player: React.FC = () => {
             </div>
           </div>
 
-          {/* Nút phát */}
-          <div className="flex items-center justify-center gap-6 mt-2">
+          {/* Nút phát + tua 10s/30s */}
+          <div className="flex items-center justify-center gap-4 sm:gap-6 w-full">
+            <button
+              onClick={() => {
+                setHasUserInteracted(true);
+                setCurrentTime(Math.max(0, currentTime - 10));
+              }}
+              className="text-slate-500 hover:text-primary p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800/50 touch-manipulation"
+            >
+              <span className="material-symbols-outlined text-3xl">replay_10</span>
+            </button>
+
             <button
               onClick={handleSkipPrevious}
               className="text-slate-700 dark:text-slate-200 hover:text-primary transition-colors touch-manipulation"
@@ -384,7 +425,7 @@ const Player: React.FC = () => {
 
             <button
               onClick={togglePlay}
-              className="bg-primary hover:bg-primary-dark text-white rounded-full p-6 shadow-lg shadow-primary/30 hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-300 flex items-center justify-center touch-manipulation"
+              className="bg-primary hover:bg-primary-dark text-white rounded-full p-5 shadow-lg shadow-primary/30 hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-300 flex items-center justify-center touch-manipulation"
             >
               <span className="material-symbols-outlined text-5xl fill-1">
                 {isPlaying ? 'pause' : 'play_arrow'}
@@ -398,24 +439,36 @@ const Player: React.FC = () => {
             >
               <span className="material-symbols-outlined text-4xl fill-1">skip_next</span>
             </button>
+
+            <button
+              onClick={() => {
+                setHasUserInteracted(true);
+                setCurrentTime(Math.min(duration, currentTime + 30));
+              }}
+              className="text-slate-500 hover:text-primary p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800/50 touch-manipulation"
+            >
+              <span className="material-symbols-outlined text-3xl">forward_30</span>
+            </button>
           </div>
 
           {/* Speed + Volume - chung 1 hàng nhỏ gọn */}
-          <div className="flex items-center justify-between w-full px-4 mt-3">
+          <div className="flex items-center justify-between w-full px-2 mt-2">
             {/* Speed */}
-            <button
-              onClick={() => setShowSpeedMenu(!showSpeedMenu)}
-              className="flex items-center gap-1 text-slate-500 hover:text-primary font-medium text-sm"
-            >
-              <span className="material-symbols-outlined text-xl">speed</span>
-              {playbackSpeed}x
-            </button>
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-xl text-slate-500">speed</span>
+              <button
+                onClick={() => setShowSpeedMenu(!showSpeedMenu)}
+                className="text-slate-500 hover:text-primary font-medium text-sm px-2 py-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 transition touch-manipulation"
+              >
+                {playbackSpeed}x
+              </button>
+            </div>
 
             {/* Volume */}
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setVolume(volume === 0 ? 70 : 0)}
-                className="text-slate-500 hover:text-primary transition-colors touch-manipulation"
+                className="text-slate-500 hover:text-primary transition-colors touch-manipulation p-1"
               >
                 <span className="material-symbols-outlined text-xl">
                   {volume === 0 ? 'volume_off' : volume < 30 ? 'volume_mute' : volume < 70 ? 'volume_down' : 'volume_up'}
@@ -424,7 +477,7 @@ const Player: React.FC = () => {
               <div
                 ref={volumeBarRef}
                 onClick={handleVolumeClick}
-                className="relative h-2 w-32 bg-slate-200 dark:bg-slate-700 rounded-full cursor-pointer touch-manipulation"
+                className="relative h-2 w-36 bg-slate-200 dark:bg-slate-700 rounded-full cursor-pointer touch-manipulation"
               >
                 <div
                   className="h-full bg-primary rounded-full transition-all"
