@@ -14,33 +14,33 @@ const History: React.FC = () => {
   const user = JSON.parse(localStorage.getItem('user') || 'null');
   const userId = user?._id || user?.id;
 
-  const fetchHistory = async () => {
-    if (!userId) {
-      setError('Vui lòng đăng nhập để xem lịch sử nghe.');
-      setLoading(false);
-      return;
-    }
+ const fetchHistory = async () => {
+  if (!userId) {
+    setError('Vui lòng đăng nhập để xem lịch sử nghe.');
+    setLoading(false);
+    return;
+  }
 
-    setLoading(true);
-    setError(null);
+  setLoading(true);
+  setError(null);
 
-    try {
-      const data = await getUserHistory(userId);
-      const sorted = data.sort((a, b) => 
-        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-      );
-      setHistoryItems(sorted);
-    } catch (err: any) {
-      console.error('Lỗi tải lịch sử:', err);
-      setError('Không thể tải lịch sử nghe. Vui lòng thử lại sau.');
-    } finally {
-      setLoading(false);
-    }
-  };
+  try {
+    const data = await getUserHistory(userId);
+    const sorted = data.sort((a, b) =>
+      new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+    );
+    setHistoryItems(sorted);
+  } catch (err: any) {
+    console.error('Lỗi tải lịch sử:', err);
+    setError('Không thể tải lịch sử nghe. Vui lòng thử lại sau.');
+  } finally {
+    setLoading(false);
+  }
+};
 
   useEffect(() => {
     fetchHistory();
-  }, [userId, location.key]); // refetch khi quay lại trang
+  }, [userId, location.key]); 
 
   const handleClearHistory = async () => {
     if (!confirm('Bạn có chắc muốn xóa toàn bộ lịch sử nghe?')) return;
@@ -49,22 +49,53 @@ const History: React.FC = () => {
 
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
-    return date.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    return date.toLocaleDateString('vi-VN', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
   };
 
   const handlePlayHistory = (item: HistoryItem) => {
     const story = item.storyId;
     const chapter = item.chapterId;
 
+    // Kiểm tra dữ liệu bắt buộc
     if (!story?._id) {
-      alert('Không tìm thấy thông tin truyện.');
+      alert('Không tìm thấy thông tin truyện. Vui lòng thử lại.');
       return;
     }
 
+    if (!chapter?._id) {
+      alert('Không tìm thấy thông tin chương. Vui lòng thử lại.');
+      return;
+    }
+
+    // Debug log để kiểm tra
+    console.log('[HISTORY → PLAYER] Navigating with state:', {
+      storyId: story._id,
+      chapterId: chapter._id,
+      lastPosition: item.lastPosition,
+    });
+
+    // Truyền chapterId (_id) thay vì object đầy đủ (vì type không có audioUrl)
     navigate(`/player/${story._id}`, {
       state: {
-        story,
-        chapter,
+        story: {
+          _id: story._id,
+          title: story.title || 'Truyện không xác định',
+          author: story.author || 'Không xác định',
+          // Dùng đúng field có trong type: coverImage
+          coverImage:
+            story.coverImage ||
+            'https://picsum.photos/400/600?random=1',
+          // Type không có chapters → dùng mảng rỗng
+          chapters: [],
+        },
+        // Truyền chapterId (_id) để Player tự fetch chapter đầy đủ nếu cần
+        chapterId: chapter._id,
         lastPosition: item.lastPosition || 0,
       },
     });
@@ -106,13 +137,17 @@ const History: React.FC = () => {
             Tiếp tục hành trình lắng nghe của bạn
           </p>
         </div>
-        <button
-          onClick={handleClearHistory}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors"
-        >
-          <span className="material-symbols-outlined text-[20px]">delete_sweep</span>
-          Xóa lịch sử
-        </button>
+
+        {historyItems.length > 0 && (
+          <button
+            onClick={handleClearHistory}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors"
+            title="Xóa toàn bộ lịch sử nghe"
+          >
+            <span className="material-symbols-outlined text-[20px]">delete_sweep</span>
+            Xóa lịch sử
+          </button>
+        )}
       </div>
 
       {historyItems.length === 0 ? (
@@ -130,13 +165,13 @@ const History: React.FC = () => {
           {historyItems.map((item) => {
             const story = item.storyId;
             const chapter = item.chapterId;
-            const progress = item.progressPercent || 0;
-            const isCompleted = item.isCompleted || progress >= 100;
 
-            // Fallback an toàn nếu story null hoặc thiếu title
             const storyTitle = story?.title || 'Truyện không xác định';
             const author = story?.author || 'Không xác định';
-            const cover = story?.coverImage || story?.imageUrl || 'https://picsum.photos/400/600?random=1';
+            const cover = story?.coverImage || 'https://picsum.photos/400/600?random=1';
+
+            const progress = item.progressPercent || 0;
+            const isCompleted = item.isCompleted || progress >= 100;
 
             return (
               <div
@@ -152,8 +187,12 @@ const History: React.FC = () => {
                       alt={storyTitle}
                       className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
                       src={cover}
+                      onError={(e) => {
+                        e.currentTarget.src = 'https://picsum.photos/400/600?random=1';
+                      }}
                     />
                   </div>
+
                   <div className="flex-1 min-w-0">
                     <h3 className="text-base font-bold text-slate-900 dark:text-white truncate group-hover:text-primary transition-colors">
                       {storyTitle}
@@ -175,14 +214,14 @@ const History: React.FC = () => {
                             isCompleted ? 'bg-emerald-500' : 'bg-primary'
                           }`}
                           style={{ width: `${progress}%` }}
-                        ></div>
+                        />
                       </div>
                       <span
                         className={`text-[11px] font-medium ${
                           isCompleted ? 'text-emerald-500' : 'text-slate-400'
                         }`}
                       >
-                        {isCompleted ? 'Hoàn thành' : `${Math.round(progress)}% đã nghe`}
+                        {isCompleted ? 'Hoàn thành' : `${Math.round(progress)}%`}
                       </span>
                     </div>
                   </div>

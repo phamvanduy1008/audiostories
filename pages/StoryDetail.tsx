@@ -7,22 +7,38 @@ import { getStoryInsight } from "../services/geminiService";
 const ITEMS_PER_PAGE = 10;
 
 const getAudioDuration = (url: string): Promise<string> => {
+  if (url.includes("archive.org") || url.includes(".ca.archive.org")) {
+    return Promise.reject("Skipped: Archive.org restricted metadata");
+  }
+
   return new Promise((resolve, reject) => {
     const audio = new Audio();
     audio.src = url;
     audio.preload = "metadata";
 
+    const timeoutId = setTimeout(() => {
+      audio.src = "";
+      reject(new Error("Timeout loading audio metadata"));
+    }, 8000);
+
     audio.onloadedmetadata = () => {
-      if (isNaN(audio.duration)) return reject("Invalid duration");
+      clearTimeout(timeoutId);
+      if (isNaN(audio.duration) || audio.duration === Infinity) {
+        reject(new Error("Invalid duration"));
+        return;
+      }
 
       const totalSeconds = Math.floor(audio.duration);
       const minutes = Math.floor(totalSeconds / 60);
       const seconds = totalSeconds % 60;
-
       resolve(`${minutes}:${seconds.toString().padStart(2, "0")}`);
     };
 
-    audio.onerror = () => reject("Cannot load audio metadata");
+    audio.onerror = (e) => {
+      clearTimeout(timeoutId);
+      console.warn("Audio metadata error:", e);
+      reject(new Error("Cannot load audio metadata"));
+    };
   });
 };
 
@@ -32,7 +48,8 @@ const StoryDetail: React.FC = () => {
 
   const [story, setStory] = useState<Story | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true);              // loading chính (story info)
+  const [chaptersLoading, setChaptersLoading] = useState(true); // loading riêng cho chapters
   const [error, setError] = useState<string | null>(null);
   const [aiInsight, setAiInsight] = useState("");
   const [isSaved, setIsSaved] = useState(false);
@@ -42,10 +59,8 @@ const StoryDetail: React.FC = () => {
     type: "success" | "error";
   } | null>(null);
 
-  // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
 
-  // Lấy userId an toàn
   const userId = useMemo(() => {
     try {
       const userStr = localStorage.getItem("user");
@@ -57,27 +72,22 @@ const StoryDetail: React.FC = () => {
     }
   }, []);
 
-  // Toast tự ẩn sau 5 giây
+  // Toast tự ẩn
   useEffect(() => {
     if (!toastMessage) return;
     const timer = setTimeout(() => setToastMessage(null), 5000);
     return () => clearTimeout(timer);
   }, [toastMessage]);
 
-  // Check saved story
+  // Check đã lưu
   useEffect(() => {
     if (!userId || !story?.id) return;
-
     checkSaveStory(userId, story.id)
-      .then((res) => {
-        setIsSaved(!!res.saved);
-      })
-      .catch((err) => {
-        console.warn("Check save story error:", err);
-      });
+      .then((res) => setIsSaved(!!res?.saved))
+      .catch((err) => console.warn("Check save error:", err));
   }, [userId, story?.id]);
 
-  // Fetch story + enrich duration
+  // Fetch story
   useEffect(() => {
     if (!id) {
       setError("Không tìm thấy ID truyện");
@@ -88,39 +98,68 @@ const StoryDetail: React.FC = () => {
     const fetchStory = async () => {
       setLoading(true);
       setError(null);
+      setChaptersLoading(true);
 
       try {
         const data = await getStoryById(id);
 
-        const chaptersWithDuration = await Promise.all(
-          (data.chapters || []).map(async (chapter) => {
-            if (!chapter.audioUrl) return chapter;
+        setStory(data);
 
+        // Xử lý chapters
+        const processedChapters = (data.chapters || []).map((chapter: Chapter) => {
+          if (chapter.duration && chapter.duration !== "--:--") {
+            return chapter;
+          }
+
+          // 2. Fallback cache localStorage
+          const cacheKey = `audio-duration:${chapter.audioUrl}`;
+          const cached = localStorage.getItem(cacheKey);
+
+          if (cached && cached !== "--:--") {
+            console.log(`[CACHE] Duration chapter ${chapter.id}: ${cached}`);
+            return { ...chapter, duration: cached };
+          }
+          return { ...chapter, duration: null };
+        });
+
+        setChapters(processedChapters);
+
+        const missingDurations = processedChapters.filter(
+          (ch) => !ch.duration && ch.audioUrl
+        );
+
+        if (missingDurations.length > 0) {
+          console.log(`Tính duration async cho ${missingDurations.length} chapter...`);
+
+          missingDurations.forEach(async (chapter) => {
             const cacheKey = `audio-duration:${chapter.audioUrl}`;
-            const cached = localStorage.getItem(cacheKey);
-
-            if (cached) {
-              return { ...chapter, duration: cached };
-            }
 
             try {
               const duration = await getAudioDuration(chapter.audioUrl);
               localStorage.setItem(cacheKey, duration);
-              return { ...chapter, duration };
-            } catch (err) {
-              console.warn(`Không tính được duration cho chapter ${chapter.id}:`, err);
-              return chapter;
-            }
-          })
-        );
 
-        setStory({ ...data, chapters: chaptersWithDuration });
-        setChapters(chaptersWithDuration);
+              setChapters((prev) =>
+                prev.map((c) =>
+                  c.id === chapter.id ? { ...c, duration } : c
+                )
+              );
+            } catch (err) {
+              console.warn(`Không lấy được duration chapter ${chapter.id}:`, err);
+              localStorage.setItem(cacheKey, "--:--");
+              setChapters((prev) =>
+                prev.map((c) =>
+                  c.id === chapter.id ? { ...c, duration: "--:--" } : c
+                )
+              );
+            }
+          });
+        }
       } catch (err: any) {
-        console.error("Lỗi khi fetch story:", err);
+        console.error("Lỗi fetch story:", err);
         setError("Không thể tải truyện. Vui lòng thử lại sau.");
       } finally {
         setLoading(false);
+        setChaptersLoading(false);
       }
     };
 
@@ -144,20 +183,14 @@ const StoryDetail: React.FC = () => {
         setAiInsight(insight);
         localStorage.setItem(cacheKey, insight);
       })
-      .catch((err) => {
-        console.warn("Gemini insight error:", err);
-      });
+      .catch((err) => console.warn("Gemini insight error:", err));
   }, [story?.id]);
 
-  // Save story
   const handleSaveStory = async () => {
     if (isSaved) return;
 
     if (!userId) {
-      setToastMessage({
-        text: "Vui lòng đăng nhập để lưu truyện",
-        type: "error",
-      });
+      setToastMessage({ text: "Vui lòng đăng nhập để lưu truyện", type: "error" });
       navigate("/login");
       return;
     }
@@ -177,7 +210,7 @@ const StoryDetail: React.FC = () => {
     }
   };
 
-  // Pagination logic
+  // Pagination
   const totalPages = Math.ceil(chapters.length / ITEMS_PER_PAGE);
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
   const endIndex = startIndex + ITEMS_PER_PAGE;
@@ -188,7 +221,6 @@ const StoryDetail: React.FC = () => {
     setCurrentPage(page);
   };
 
-  // Render
   if (loading) {
     return (
       <div className="p-20 text-center text-lg animate-pulse">
@@ -219,7 +251,7 @@ const StoryDetail: React.FC = () => {
       )}
 
       <div className="max-w-[1080px] mx-auto px-4 md:px-10 py-8 lg:py-16">
-        {/* Hero section */}
+        {/* Hero section - hiển thị ngay */}
         <div className="flex flex-col lg:flex-row gap-8 lg:gap-16">
           <div className="w-full lg:w-[400px]">
             <div className="aspect-square rounded-2xl shadow-2xl overflow-hidden border border-slate-200 dark:border-slate-700">
@@ -262,8 +294,8 @@ const StoryDetail: React.FC = () => {
                       ? "bg-green-100 text-green-700 cursor-default border border-green-200"
                       : saveLoading
                       ? "bg-gray-300 text-gray-600 cursor-wait"
-                      : "bg-slate-100 hover:bg-primary/10 text-slate-700 hover:shadow-md border border-slate-200 dark:border-slate-700"
-                  } dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-primary/20`}
+                      : "bg-slate-100 hover:bg-primary/10 text-slate-700 hover:shadow-md border border-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-primary/20"
+                  }`}
               >
                 <span className="material-symbols-outlined text-[20px]">
                   {saveLoading ? "refresh" : isSaved ? "bookmark_added" : "bookmark"}
@@ -292,10 +324,7 @@ const StoryDetail: React.FC = () => {
                 if (chapters.length > 0) {
                   const firstChapter = chapters[0];
                   navigate(`/player/${story.id}`, {
-                    state: {
-                      story,
-                      chapter: firstChapter,
-                    },
+                    state: { story, chapter: firstChapter },
                   });
                 } else {
                   navigate(`/player/${story.id}`, { state: { story } });
@@ -313,13 +342,17 @@ const StoryDetail: React.FC = () => {
           </div>
         </div>
 
-        {/* Chapter List with Pagination */}
+        {/* Danh sách chương */}
         <div className="mt-16 pt-12 border-t border-slate-200 dark:border-slate-700">
           <h2 className="text-2xl md:text-3xl font-bold mb-6 text-slate-900 dark:text-white">
             Danh sách chương {chapters.length > 0 ? `(${chapters.length})` : "(Sắp có)"}
           </h2>
 
-          {chapters.length === 0 ? (
+          {chaptersLoading ? (
+            <div className="text-center py-12 text-slate-500 dark:text-slate-400 animate-pulse">
+              Đang tải danh sách chương...
+            </div>
+          ) : chapters.length === 0 ? (
             <div className="text-center py-12 text-slate-500 dark:text-slate-400">
               Chưa có chương nào được cập nhật cho truyện này.
             </div>
@@ -359,7 +392,6 @@ const StoryDetail: React.FC = () => {
                 ))}
               </div>
 
-              {/* Pagination Controls */}
               {totalPages > 1 && (
                 <div className="mt-8 flex items-center justify-center gap-4 flex-wrap">
                   <button

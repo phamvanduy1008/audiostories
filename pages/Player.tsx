@@ -30,9 +30,8 @@ const Player: React.FC = () => {
   const audioRef = useRef<HTMLAudioElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
   const volumeBarRef = useRef<HTMLDivElement>(null);
-  const currentTimeRef = useRef(0);
-  const durationRef = useRef(0);
   const bufferingTimer = useRef<NodeJS.Timeout | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
 
   const userId = useMemo(() => {
     try {
@@ -46,67 +45,64 @@ const Player: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    console.log('=== [DEBUG] LOCATION.STATE ===', location.state);
-  }, [location.state]);
-
-  useEffect(() => {
-    const handleInteraction = () => setHasUserInteracted(true);
-    window.addEventListener('click', handleInteraction, { once: true });
-    window.addEventListener('touchstart', handleInteraction, { once: true });
-    return () => {
-      window.removeEventListener('click', handleInteraction);
-      window.removeEventListener('touchstart', handleInteraction);
-    };
-  }, []);
-
-  useEffect(() => {
-    const navState = location.state as {
-      chapter?: Chapter & { order?: number };
-      story?: Story;
-      lastPosition?: number;
-    } | undefined;
-
-    if (navState?.story) {
-      setStory(navState.story);
-      setLoading(false);
-
-      if (navState.chapter?.audioUrl) {
-        setSelectedChapter({
-          ...navState.chapter,
-          audioUrl: navState.chapter.audioUrl,
-        });
-      }
-      return;
-    }
-
-    if (!id) {
-      setLoading(false);
-      return;
-    }
+    const navState = location.state as any;
 
     setLoading(true);
 
-    getStoryById(id)
-      .then((data) => {
-        setStory(data);
-        if (data.chapters?.length) {
-          setSelectedChapter(data.chapters[0]);
-        }
-      })
-      .catch((err) => {
-        console.error('Fetch story failed:', err);
-      })
-      .finally(() => setLoading(false));
+    if (navState?.story && navState?.chapter?.audioUrl) {
+      setStory(navState.story);
+      setSelectedChapter(navState.chapter);
+      setLoading(false);
+      return;
+    }
+
+    if (navState?.story && navState?.chapterId) {
+      getStoryById(navState.story._id)
+        .then((data) => {
+          setStory(data);
+          const matched = data.chapters?.find((ch: Chapter) => ch.id === navState.chapterId);
+          if (matched) {
+            setSelectedChapter(matched);
+          } else {
+            setSelectedChapter(data.chapters?.[0] || null);
+          }
+        })
+        .catch((err) => {
+          console.error('Fetch story failed:', err);
+          setAudioError('Không tải được truyện.');
+        })
+        .finally(() => setLoading(false));
+      return;
+    }
+
+    if (id) {
+      getStoryById(id)
+        .then((data) => {
+          setStory(data);
+          if (data.chapters?.length) {
+            setSelectedChapter(data.chapters[0]);
+          }
+        })
+        .catch((err) => {
+          console.error('Fetch story failed:', err);
+          setAudioError('Không tải được truyện.');
+        })
+        .finally(() => setLoading(false));
+    } else {
+      setLoading(false);
+    }
   }, [id, location.state]);
 
   useEffect(() => {
-    if (!story?.chapters || !selectedChapter?.id) {
-      setCurrentChapterIndex(-1);
-      return;
+    const audio = audioRef.current;
+    if (!audio || !selectedChapter?.audioUrl) return;
+
+    const lastPos = location.state?.lastPosition ?? 0;
+    if (lastPos > 0) {
+      audio.currentTime = lastPos;
+      setCurrentTime(lastPos);
     }
-    const idx = story.chapters.findIndex((ch) => ch.id === selectedChapter.id);
-    setCurrentChapterIndex(idx);
-  }, [story?.chapters, selectedChapter?.id]);
+  }, [selectedChapter?.audioUrl, location.state?.lastPosition]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -117,30 +113,20 @@ const Player: React.FC = () => {
 
     if (audio.src === selectedChapter.audioUrl) return;
 
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
+    setAudioError(null);
+    setIsBuffering(false);
+
     audio.src = selectedChapter.audioUrl;
     audio.preload = 'metadata';
     audio.load();
 
     const handleLoadedMetadata = () => {
       const dur = isNaN(audio.duration) ? 0 : audio.duration;
-      durationRef.current = dur;
       setDuration(dur);
       setAudioError(null);
-
-      const lastPos = location.state?.lastPosition ?? 0;
-      if (lastPos > 0 && lastPos < dur) {
-        audio.currentTime = lastPos;
-        currentTimeRef.current = lastPos;
-        setCurrentTime(lastPos);
-
-        if (hasUserInteracted && document.visibilityState === 'visible') {
-          audio.play().catch(() => setIsPlaying(false));
-          setIsPlaying(true);
-        }
-      } else {
-        currentTimeRef.current = 0;
-        setCurrentTime(0);
-      }
     };
 
     const handleError = () => {
@@ -150,9 +136,7 @@ const Player: React.FC = () => {
     };
 
     const handleWaiting = () => {
-      bufferingTimer.current = setTimeout(() => {
-        if (!isPlaying) setIsBuffering(true);
-      }, 1500);
+      bufferingTimer.current = setTimeout(() => setIsBuffering(true), 1500);
     };
 
     const handlePlaying = () => {
@@ -160,27 +144,64 @@ const Player: React.FC = () => {
       setIsBuffering(false);
     };
 
+    const handleCanPlay = () => setIsBuffering(false);
+
     audio.addEventListener('loadedmetadata', handleLoadedMetadata);
     audio.addEventListener('error', handleError);
     audio.addEventListener('waiting', handleWaiting);
     audio.addEventListener('playing', handlePlaying);
+    audio.addEventListener('canplay', handleCanPlay);
 
     return () => {
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('error', handleError);
       audio.removeEventListener('waiting', handleWaiting);
       audio.removeEventListener('playing', handlePlaying);
+      audio.removeEventListener('canplay', handleCanPlay);
       if (bufferingTimer.current) clearTimeout(bufferingTimer.current);
     };
-  }, [selectedChapter?.audioUrl, location.state?.lastPosition, hasUserInteracted, isPlaying]);
+  }, [selectedChapter?.audioUrl]);
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
-    const update = () => setCurrentTime(audio.currentTime);
-    audio.addEventListener('timeupdate', update);
-    return () => audio.removeEventListener('timeupdate', update);
+    const updateTime = () => {
+      if (audio && !audio.paused && !audio.ended) {
+        setCurrentTime(audio.currentTime);
+        animationFrameRef.current = requestAnimationFrame(updateTime);
+      }
+    };
+
+    if (isPlaying) {
+      animationFrameRef.current = requestAnimationFrame(updateTime);
+    }
+
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+    };
+  }, [isPlaying]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const handleTimeUpdate = () => setCurrentTime(audio.currentTime);
+    const handleDurationChange = () => {
+      const dur = isNaN(audio.duration) ? 0 : audio.duration;
+      setDuration(dur);
+    };
+
+    audio.addEventListener('timeupdate', handleTimeUpdate);
+    audio.addEventListener('durationchange', handleDurationChange);
+
+    return () => {
+      audio.removeEventListener('timeupdate', handleTimeUpdate);
+      audio.removeEventListener('durationchange', handleDurationChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -190,87 +211,117 @@ const Player: React.FC = () => {
     }
   }, [playbackSpeed, volume]);
 
-  const saveHistory = async (reason: 'ENDED' | 'PAGE_HIDE') => {
-    if (!userId || !story?.id || !selectedChapter?.id || !audioRef.current) return;
+const saveHistory = async (reason: 'ENDED' | 'PAGE_HIDE' | 'BEFORE_UNLOAD' | 'MANUAL_BACK') => {
+  if (!userId || !story?.id || !selectedChapter?.id) {
+    console.warn('[saveHistory] Thiếu dữ liệu:', { userId, storyId: story?.id, chapterId: selectedChapter?.id });
+    return;
+  }
 
-    const pos = currentTimeRef.current;
-    const dur = durationRef.current;
-    const progress = dur > 0 ? (pos / dur) * 100 : 0;
+  const audio = audioRef.current;
+  const pos = audio?.currentTime ?? currentTime;
+  const dur = audio?.duration ?? duration;
+  const progress = dur > 0 ? (pos / dur) * 100 : 0;
 
-    const payload = {
-      userId,
-      storyId: story.id,
-      chapterId: selectedChapter.id,
-      lastPosition: Math.floor(pos),
-      duration: Math.floor(dur),
-      progressPercent: Math.round(progress),
-      isCompleted: progress >= 99,
-    };
-
-    try {
-      if (reason === 'PAGE_HIDE') {
-        const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
-        navigator.sendBeacon(`${API_URL}/history`, blob);
-      } else {
-        await axios.post(`${API_URL}/history`, payload);
-      }
-    } catch (err) {
-      console.error(`[HISTORY] Failed (${reason}):`, err);
-    }
+  const payload = {
+    userId,
+    storyId: story.id,
+    chapterId: selectedChapter.id,
+    lastPosition: Math.floor(pos),
+    duration: Math.floor(dur),
+    progressPercent: Math.round(progress),
+    isCompleted: progress >= 99,
   };
+
+  console.log(`[saveHistory] (${reason}) Gửi payload:`, payload);
+
+  try {
+    // Luôn dùng axios cho MANUAL_BACK (vì đang ở trang, không cần sendBeacon)
+    const res = await axios.post(`${API_URL}/history`, payload);
+    console.log(`[saveHistory] (${reason}) Response:`, res.data);
+  } catch (err: any) {
+    console.error(`[saveHistory] (${reason}) Lỗi:`, {
+      message: err.message,
+      response: err.response?.data,
+      status: err.response?.status,
+    });
+  }
+};
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
-    const onEnded = () => {
+    const handleEnded = () => {
       setIsPlaying(false);
       saveHistory('ENDED');
     };
 
-    audio.addEventListener('ended', onEnded);
-    return () => audio.removeEventListener('ended', onEnded);
+    audio.addEventListener('ended', handleEnded);
+    return () => audio.removeEventListener('ended', handleEnded);
   }, [selectedChapter?.id, userId, story?.id]);
 
   useEffect(() => {
     const handlePageHide = () => {
-      if (audioRef.current) currentTimeRef.current = audioRef.current.currentTime;
+      console.log('[PLAYER] pagehide → lưu history');
       saveHistory('PAGE_HIDE');
     };
 
     window.addEventListener('pagehide', handlePageHide);
     return () => window.removeEventListener('pagehide', handlePageHide);
-  }, [userId, story?.id, selectedChapter?.id]);
+  }, [userId, story?.id, selectedChapter?.id, currentTime, duration]);
+
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      console.log('[PLAYER] beforeunload → lưu history');
+      saveHistory('BEFORE_UNLOAD');
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [userId, story?.id, selectedChapter?.id, currentTime, duration]);
 
   const resetAudioState = () => {
     setIsPlaying(false);
     setCurrentTime(0);
-    currentTimeRef.current = 0;
     setDuration(0);
-    durationRef.current = 0;
     setAudioError(null);
     setIsBuffering(false);
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
     }
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
   };
 
   const togglePlay = () => {
-    if (!audioRef.current) return;
+    const audio = audioRef.current;
+    if (!audio) return;
+
     setHasUserInteracted(true);
+
     if (isPlaying) {
-      audioRef.current.pause();
+      audio.pause();
+      setIsPlaying(false);
     } else {
-      audioRef.current.play().catch(() => {});
+      audio.play()
+        .then(() => setIsPlaying(true))
+        .catch((err) => {
+          console.error('Play failed:', err);
+          setIsPlaying(false);
+        });
     }
-    setIsPlaying(!isPlaying);
   };
 
   const handleSkipPrevious = () => {
     setHasUserInteracted(true);
     if (!story?.chapters || currentChapterIndex <= 0) {
-      if (audioRef.current) audioRef.current.currentTime = 0;
+      if (audioRef.current) {
+        audioRef.current.currentTime = 0;
+        setCurrentTime(0);
+      }
       return;
     }
     setSelectedChapter(story.chapters[currentChapterIndex - 1]);
@@ -279,22 +330,32 @@ const Player: React.FC = () => {
   const handleSkipNext = () => {
     setHasUserInteracted(true);
     if (!story?.chapters || currentChapterIndex >= story.chapters.length - 1) {
-      if (audioRef.current && duration > 0) audioRef.current.currentTime = duration;
+      if (audioRef.current && duration > 0) {
+        audioRef.current.currentTime = duration;
+        setCurrentTime(duration);
+      }
       return;
     }
     setSelectedChapter(story.chapters[currentChapterIndex + 1]);
   };
 
+  const seek = (time: number) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const newTime = Math.max(0, Math.min(duration, time));
+    audio.currentTime = newTime;
+    setCurrentTime(newTime);
+  };
+
   const handleProgressClick = (e: React.MouseEvent<HTMLDivElement>) => {
     setHasUserInteracted(true);
-    if (!audioRef.current || !progressBarRef.current || !duration) return;
+    if (!progressBarRef.current || !duration) return;
+
     const rect = progressBarRef.current.getBoundingClientRect();
     const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     const newTime = percent * duration;
-    setIsBuffering(true);
-    audioRef.current.currentTime = newTime;
-    currentTimeRef.current = newTime;
-    setCurrentTime(newTime);
+    seek(newTime);
   };
 
   const handleVolumeClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -323,15 +384,18 @@ const Player: React.FC = () => {
 
   return (
     <div className="min-h-screen w-full bg-white dark:bg-background-dark">
-      {/* Header */}
       <header className="flex items-center justify-between w-full px-4 py-3 z-20">
         <button
-          onClick={() => navigate(-1)}
-          className="flex items-center gap-2 text-slate-600 dark:text-slate-300 hover:text-primary transition-colors group touch-manipulation"
-        >
-          <span className="material-symbols-outlined text-xl group-hover:-translate-x-1 transition-transform">arrow_back</span>
-          <span className="text-sm font-medium hidden sm:inline">Quay lại</span>
-        </button>
+        onClick={() => {
+          console.log('[PLAYER] Nút "Quay lại" clicked → lưu history trước khi back');
+          saveHistory('MANUAL_BACK'); // Gọi lưu history
+          navigate(-1);
+        }}
+        className="flex items-center gap-2 text-slate-600 dark:text-slate-300 hover:text-primary transition-colors group touch-manipulation"
+      >
+        <span className="material-symbols-outlined text-xl group-hover:-translate-x-1 transition-transform">arrow_back</span>
+        <span className="text-sm font-medium hidden sm:inline">Quay lại</span>
+      </button>
         <div className="flex items-center gap-3">
           <button className="p-2 rounded-full text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors touch-manipulation">
             <span className="material-symbols-outlined text-xl">bookmark_border</span>
@@ -342,19 +406,16 @@ const Player: React.FC = () => {
         </div>
       </header>
 
-      {/* Main content */}
       <main className="flex-1 flex flex-col items-center w-full px-4 sm:px-6 md:px-8 lg:px-12 py-4 max-w-5xl mx-auto relative">
-        {/* Buffering overlay */}
-        {isBuffering && !isPlaying && (
+        {isBuffering && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/50 backdrop-blur-sm z-10 text-white">
             <div className="flex flex-col items-center gap-2">
               <span className="material-symbols-outlined animate-spin text-5xl">hourglass_empty</span>
-              <span className="text-base font-medium">Đang tải... (mạng chậm)</span>
+              <span className="text-base font-medium">Đang tải...</span>
             </div>
           </div>
         )}
 
-        {/* Title & Chapter info */}
         <div className="text-center mb-4 w-full">
           <span className="inline-block px-3 py-1 text-xs font-bold tracking-widest text-primary uppercase bg-primary/10 rounded-full">
             {story.category}
@@ -370,18 +431,15 @@ const Player: React.FC = () => {
           {audioError && <p className="mt-2 text-red-500 text-sm">{audioError}</p>}
         </div>
 
-        {/* Cover image */}
         <div className="relative group w-56 sm:w-64 md:w-72 aspect-square rounded-xl shadow-xl overflow-hidden mb-6">
           <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent z-10"></div>
           <div
             className="w-full h-full bg-cover bg-center transition-transform duration-500 group-hover:scale-105"
-            style={{ backgroundImage: `url('${story.imageUrl}')` }}
+            style={{ backgroundImage: `url('${story.imageUrl || story.coverImage || 'https://picsum.photos/400/600?random=1'}')` }}
           />
         </div>
 
-        {/* Controls */}
         <div className="w-full max-w-md flex flex-col gap-3 pb-6">
-          {/* Progress bar */}
           <div className="flex flex-col gap-1 w-full">
             <div className="flex justify-between text-xs font-mono text-slate-500 px-1">
               <span>{formatTime(currentTime)}</span>
@@ -403,12 +461,11 @@ const Player: React.FC = () => {
             </div>
           </div>
 
-          {/* Nút phát + tua 10s/30s */}
           <div className="flex items-center justify-center gap-4 sm:gap-6 w-full">
             <button
               onClick={() => {
                 setHasUserInteracted(true);
-                setCurrentTime(Math.max(0, currentTime - 10));
+                seek(currentTime - 10);
               }}
               className="text-slate-500 hover:text-primary p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800/50 touch-manipulation"
             >
@@ -443,7 +500,7 @@ const Player: React.FC = () => {
             <button
               onClick={() => {
                 setHasUserInteracted(true);
-                setCurrentTime(Math.min(duration, currentTime + 30));
+                seek(currentTime + 30);
               }}
               className="text-slate-500 hover:text-primary p-2 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800/50 touch-manipulation"
             >
@@ -451,9 +508,7 @@ const Player: React.FC = () => {
             </button>
           </div>
 
-          {/* Speed + Volume - chung 1 hàng nhỏ gọn */}
           <div className="flex items-center justify-between w-full px-2 mt-2">
-            {/* Speed */}
             <div className="flex items-center gap-2">
               <span className="material-symbols-outlined text-xl text-slate-500">speed</span>
               <button
@@ -464,7 +519,6 @@ const Player: React.FC = () => {
               </button>
             </div>
 
-            {/* Volume */}
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setVolume(volume === 0 ? 70 : 0)}
@@ -487,10 +541,9 @@ const Player: React.FC = () => {
             </div>
           </div>
 
-          {/* Speed menu */}
           {showSpeedMenu && (
             <div className="mt-1 w-28 bg-white dark:bg-slate-800 rounded-lg shadow-lg border border-slate-200 dark:border-slate-700 overflow-hidden z-30 mx-auto">
-              {speeds.map((s) => (
+              {[0.5, 1, 1.25, 1.5, 2].map((s) => (
                 <button
                   key={s}
                   onClick={() => {

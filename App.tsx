@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { HashRouter as Router, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
+import { BrowserRouter  as Router, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import Home from './pages/Home';
 import StoryDetail from './pages/StoryDetail';
 import Player from './pages/Player';
@@ -9,6 +9,7 @@ import History from './pages/History';
 import UserProfile from './pages/UserProfile';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import AddStory from './pages/admin/AddStory';
 
 const Header: React.FC = () => {
   const [isScrolled, setIsScrolled] = useState(false);
@@ -20,17 +21,19 @@ const Header: React.FC = () => {
 
   // Load user từ localStorage khi mount
   useEffect(() => {
-    try {
-      const storedUser = localStorage.getItem("user");
-      if (storedUser) {
-        const parsed = JSON.parse(storedUser);
-        setUser(parsed);
-      }
-    } catch (error) {
-      console.error("Lỗi parse user từ localStorage:", error);
-      localStorage.removeItem("user"); // xóa dữ liệu hỏng
+  try {
+    const storedUser = localStorage.getItem("user");
+    if (storedUser) {
+      setUser(JSON.parse(storedUser));
+    } else {
+      setUser(null);
     }
-  }, []);
+  } catch {
+    setUser(null);
+    localStorage.removeItem("user");
+  }
+}, [location.pathname]);
+
 
   // Xử lý scroll
   useEffect(() => {
@@ -56,7 +59,11 @@ const Header: React.FC = () => {
   }, [location]);
 
   // Ẩn header trên trang player
-  if (location.pathname.startsWith('/player')) return null;
+const hideLayoutPaths = ['/player', '/login', '/register'];
+
+if (hideLayoutPaths.some(path => location.pathname.startsWith(path))) {
+  return null;
+}
 
   // Hàm logout
   const handleLogout = () => {
@@ -163,7 +170,11 @@ const Header: React.FC = () => {
 // Footer giữ nguyên như cũ
 const Footer: React.FC = () => {
   const location = useLocation();
-  if (location.pathname.startsWith('/player')) return null;
+const hideLayoutPaths = ['/player', '/login', '/register'];
+
+if (hideLayoutPaths.some(path => location.pathname.startsWith(path))) {
+  return null;
+}
 
   return (
     <footer className="mt-auto bg-white dark:bg-slate-900 border-t border-slate-100 dark:border-slate-800 py-12">
@@ -200,6 +211,7 @@ function App() {
             <Route path="/player/:id" element={<Player />} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
+            <Route path="/admin/add-story" element={<AddStory />} />
           </Routes>
         </main>
         <Footer />

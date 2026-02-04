@@ -1,11 +1,16 @@
 import axios from "axios";
-import { SavedStoryItem, Story } from "../types";
+import {SavedStoryItem, Story } from "../types";
 import { Ipaddress } from "@/constants/ip";
 
 const API_URL = `${Ipaddress}/api`;
 
 export const getStories = async (): Promise<Story[]> => {
   const res = await axios.get(`${API_URL}/stories`);
+  return res.data;
+};
+
+export const createStory = async (payload: any) => {
+  const res = await axios.post(`${API_URL}/stories`, payload);
   return res.data;
 };
 
@@ -47,3 +52,4 @@ export const getSaveStory = async (
   );
   return res.data;
 };
+

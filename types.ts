@@ -15,7 +15,7 @@ export interface Story {
   title: string;
   author: string;
   category: string;
-  imageUrl: string;
+  imageUrl?: string;
   description: string;
   tags?: string[];
   chapters?: Chapter[];
@@ -50,6 +50,8 @@ export interface HistoryItem {
     title: string;
     order: number;
     duration?: number;
+    audioUrl?: string;
+
   };
   lastPosition: number;
   duration?: number;
@@ -66,4 +68,7 @@ export interface SavedStoryItem {
   updatedAt: string;
   __v?: number;
 }
-
+export interface CreateStoryResponse {
+  message: string;
+  story: Story;
+}
