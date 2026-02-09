@@ -210,6 +210,24 @@ const StoryDetail: React.FC = () => {
     }
   };
 
+  const formatDuration = (seconds?: number | string | null): string => {
+  if (!seconds) return "--:--";
+
+  const totalSeconds = Number(seconds);
+  if (isNaN(totalSeconds) || totalSeconds <= 0) return "--:--";
+
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const secs = Math.floor(totalSeconds % 60);
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+
+  return `${minutes}:${secs.toString().padStart(2, "0")}`;
+};
+
+
   // Pagination
   const totalPages = Math.ceil(chapters.length / ITEMS_PER_PAGE);
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
@@ -382,8 +400,8 @@ const StoryDetail: React.FC = () => {
                         </p>
                       )}
                     </div>
-                    <div className="text-sm text-slate-500 dark:text-slate-400 hidden sm:block min-w-[60px] text-right">
-                      {chapter.duration || "--:--"}
+                    <div className="text-sm text-slate-500 dark:text-slate-400 block min-w-[60px] text-right">
+                    {formatDuration(chapter.duration)}
                     </div>
                     <div className="size-10 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xl font-bold">
                       ▶
