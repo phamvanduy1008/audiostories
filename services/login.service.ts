@@ -95,3 +95,18 @@ export const registerUser = async (
     }
   }
 };
+
+export const socialLogin = async (email: string, name: string, provider: string): Promise<AuthResponse> => {
+  try {
+    const response = await api.post<AuthResponse>("/api/auth/social", { email, name, provider });
+    setAuthData(response.data);
+    return response.data;
+  } catch (error) {
+    const err = error as AxiosError<AuthErrorResponse>;
+    throw new Error(
+      err.response?.data?.message ||
+      err.response?.data?.error ||
+      `Đăng nhập ${provider} thất bại`
+    );
+  }
+};

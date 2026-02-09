@@ -1,31 +1,65 @@
-
-import { loginUser } from '@/services/login.service';
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import { useSignIn } from '@clerk/clerk-react';
+import { loginUser } from '@/services/login.service'; // hàm login email/password cũ
 
 const Login: React.FC = () => {
+  const { signIn, isLoaded } = useSignIn();
   const navigate = useNavigate();
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const handleLogin = async (e: React.FormEvent) => {
+  // Kiểm tra Clerk đã load xong chưa
+  if (!isLoaded) {
+    return (
+      <div className="min-h-[calc(100vh-80px)] flex items-center justify-center">
+        <div className="text-slate-500 dark:text-slate-400 text-lg animate-pulse">
+          Đang tải hệ thống đăng nhập...
+        </div>
+      </div>
+    );
+  }
+
+  // Xử lý đăng nhập bằng email + password (giữ nguyên logic cũ)
+  const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setLoading(true);
 
     try {
       const data = await loginUser(email, password);
-
-      // 👉 lưu token
-      localStorage.setItem("token", data.token);
-      localStorage.setItem("user", JSON.stringify(data));
-
+      // loginUser đã lưu token & user vào localStorage
       navigate("/");
     } catch (err: any) {
-      setError(err.response?.data?.message || "Đăng nhập thất bại");
+      setError(err.message || "Đăng nhập thất bại. Vui lòng kiểm tra lại email/mật khẩu.");
+    } finally {
+      setLoading(false);
     }
   };
 
+  // Xử lý đăng nhập social (Google hoặc Facebook)
+  const handleSocialLogin = async (strategy: "oauth_google" | "oauth_facebook") => {
+    setError("");
+    setLoading(true);
+
+    const providerName = strategy === "oauth_google" ? "Google" : "Facebook";
+
+    try {
+      await signIn.authenticateWithRedirect({
+        strategy,
+        redirectUrl: "/sso-callback",          // trang Clerk xử lý callback tạm thời
+        redirectUrlComplete: "/social-callback", // trang xử lý cuối cùng (lấy user & gọi backend)
+      });
+    } catch (err: any) {
+      setError(err.message || `Đăng nhập bằng ${providerName} thất bại. Vui lòng thử lại.`);
+      console.error("Social login error:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="min-h-[calc(100vh-80px)] w-full flex items-center justify-center p-4 bg-slate-50 dark:bg-background-dark/50 relative overflow-hidden">
@@ -48,14 +82,33 @@ const Login: React.FC = () => {
 
           {/* Social Login */}
           <div className="grid grid-cols-2 gap-4 mb-8">
-            <button className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all font-bold text-sm text-slate-700 dark:text-slate-200">
+            {/* Nút Google */}
+            <button
+              onClick={() => handleSocialLogin("oauth_google")}
+              disabled={loading}
+              className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all font-bold text-sm text-slate-700 dark:text-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
               <img src="https://www.gstatic.com/images/branding/product/1x/gsa_512dp.png" className="w-5 h-5" alt="Google" />
               Google
             </button>
-            <button className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all font-bold text-sm text-slate-700 dark:text-slate-200">
-              <span className="material-symbols-outlined text-blue-600 text-xl">facebook</span>
-              Facebook
-            </button>
+
+            {/* Nút Facebook */}
+            <button
+  onClick={() => handleSocialLogin("oauth_facebook")}
+  disabled={loading}
+  className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all font-bold text-sm text-slate-700 dark:text-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
+>
+  {/* Icon Facebook SVG thay thế */}
+  <svg 
+    xmlns="http://www.w3.org/2000/svg" 
+    viewBox="0 0 24 24" 
+    className="w-5 h-5" 
+    fill="currentColor"
+  >
+    <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+  </svg>
+  Facebook
+</button>
           </div>
 
           <div className="relative mb-8">
@@ -68,13 +121,19 @@ const Login: React.FC = () => {
           </div>
 
           {/* Login Form */}
-          <form onSubmit={handleLogin} className="space-y-5">
+          <form onSubmit={handleEmailLogin} className="space-y-5">
+            {error && (
+              <div className="text-red-500 text-center text-sm bg-red-50 dark:bg-red-900/20 p-3 rounded-xl">
+                {error}
+              </div>
+            )}
+
             <div className="space-y-2">
               <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Email</label>
               <div className="relative">
                 <span className="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">mail</span>
-                <input 
-                  type="email" 
+                <input
+                  type="email"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
@@ -91,8 +150,8 @@ const Login: React.FC = () => {
               </div>
               <div className="relative">
                 <span className="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">lock</span>
-                <input 
-                  type="password" 
+                <input
+                  type="password"
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -102,11 +161,12 @@ const Login: React.FC = () => {
               </div>
             </div>
 
-            <button 
+            <button
               type="submit"
-              className="w-full py-4 bg-primary hover:bg-primary-dark text-white rounded-2xl font-black shadow-xl shadow-primary/25 hover:shadow-primary/40 transition-all transform active:scale-[0.98] mt-4"
+              disabled={loading}
+              className={`w-full py-4 bg-primary hover:bg-primary-dark text-white rounded-2xl font-black shadow-xl shadow-primary/25 hover:shadow-primary/40 transition-all transform active:scale-[0.98] mt-4 ${loading ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
-              Đăng nhập
+              {loading ? "Đang đăng nhập..." : "Đăng nhập"}
             </button>
           </form>
 

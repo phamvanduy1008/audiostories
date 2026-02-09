@@ -15,7 +15,7 @@ const StoryCard: React.FC<StoryCardProps> = ({ story }) => {
 
   return (
     <Link
-      to={`/stories/id/${story.id || 'unknown'}`}
+      to={`/stories/id/${story.id || 'admin'}`}
       state={{ story }}
       onClick={() => {
         console.log('Navigating to StoryDetail with state.story:', story);
